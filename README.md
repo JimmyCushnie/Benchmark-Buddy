@@ -37,10 +37,13 @@ Here's an example output:
 
 Your project folder should:
 
-- Be a git repo
-- Contain at least one `.csproj` file with a package reference to `BenchmarkDotNet`
+- Be a git repo.
+- Contain at least one `.csproj` file with a package reference to `BenchmarkDotNet`.
 
-Your BenchmarkDotNet project(s) should use [BenchmarkSwitcher](https://benchmarkdotnet.org/articles/guides/how-to-run.html#benchmarkswitcher) to run the benchmarks.
+Your BenchmarkDotNet project(s) should:
+
+* Use [BenchmarkSwitcher](https://benchmarkdotnet.org/articles/guides/how-to-run.html#benchmarkswitcher) to run the benchmarks, so that when Benchmark Buddy passes CLI arguments to the program they work as intended.
+* Export the results as JSON, so that Benchmark Buddy can find and parse them. BDN does this by default, but if you're using a custom config, you'll need to do `config.AddExporter(JsonExporter.Default)`.
 
 
 
