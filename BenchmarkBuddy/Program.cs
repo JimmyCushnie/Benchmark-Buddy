@@ -70,7 +70,11 @@ static class Program
             Console.WriteLine($"Current ref: `{originalRef}`");
             Console.WriteLine();
 
-            // 1. Stash
+            // 1. Run benchmarks on HEAD
+            var headResults = await CollectBenchmarks(repoPath, filter, useFullNames);
+            Console.WriteLine();
+
+            // 2. Stash
             var hadChanges = !string.IsNullOrWhiteSpace(await RunGit("status --porcelain", repoPath, writeOutput: false));
             if (hadChanges)
             {
@@ -78,10 +82,6 @@ static class Program
                 await RunGit("stash push -u -k -m \"benchmark-buddy\"", repoPath, writeOutput: true);
                 Console.WriteLine();
             }
-
-            // 2. Run benchmarks on HEAD
-            var headResults = await CollectBenchmarks(repoPath, filter, useFullNames);
-            Console.WriteLine();
 
             // 3. Checkout baseline
             Console.WriteLine($"Checking out baseline `{baseline}`...");
@@ -97,7 +97,7 @@ static class Program
             await RunGit($"checkout {originalRef}", repoPath, writeOutput: true);
             if (hadChanges)
             {
-                Console.WriteLine("Popping stash …\n");
+                Console.WriteLine("Popping stash...");
                 await RunGit("stash pop", repoPath, writeOutput: true);
             }
 
