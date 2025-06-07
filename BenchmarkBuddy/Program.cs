@@ -107,7 +107,7 @@ static class Program
             Console.WriteLine();
             Console.WriteLine();
 
-            var diffs = new List<BenchmarkResults>();
+            var diffs = new List<BenchmarkDiff>();
             int benchmarksBelowThresholdCount = 0;
 
             foreach (var (benchmarkName, headStats) in headResults)
@@ -143,6 +143,34 @@ static class Program
             Console.WriteLine();
             Console.WriteLine();
             Console.WriteLine($"{benchmarksBelowThresholdCount} benchmarks not shown because they were below the difference threshold of {thresholdPercent}%.");
+
+
+
+            var benchmarksOnlyInHead = headResults.Where(kvp => !baselineResults.ContainsKey(kvp.Key)).Select(kvp => new BenchmarkResult(kvp.Key, kvp.Value)).ToArray();
+            var benchmarksOnlyInBaseline = baselineResults.Where(kvp => !headResults.ContainsKey(kvp.Key)).Select(kvp => new BenchmarkResult(kvp.Key, kvp.Value)).ToArray();
+
+            if (benchmarksOnlyInHead.Length > 0)
+            {
+                Console.WriteLine();
+                Console.WriteLine();
+                Console.WriteLine("Benchmarks only in head:");
+                Console.WriteLine();
+                PrintTable(benchmarksOnlyInHead);
+            }
+
+            if (benchmarksOnlyInBaseline.Length > 0)
+            {
+                Console.WriteLine();
+                Console.WriteLine();
+                Console.WriteLine("Benchmarks only in baseline:");
+                Console.WriteLine();
+                PrintTable(benchmarksOnlyInBaseline);
+            }
+
+            Console.WriteLine();
+            Console.WriteLine();
+            Console.WriteLine("And thus ends the output of Benchmark Buddy. Have a nice day!");
+
         }, repoDirectoryOption, baselineOption, thresholdOption, filterOption, useFullNamesOption);
 
         return await rootCmd.InvokeAsync(args);
@@ -240,10 +268,12 @@ static class Program
     }
 
 
-    readonly record struct BenchmarkResults(string BenchmarkName, BenchmarkStats Baseline, BenchmarkStats Head)
+    readonly record struct BenchmarkDiff(string BenchmarkName, BenchmarkStats Baseline, BenchmarkStats Head)
     {
         public double Ratio => Head.MeanNs / Baseline.MeanNs;
     }
+
+    readonly record struct BenchmarkResult(string BenchmarkName, BenchmarkStats Result);
 
     readonly record struct BenchmarkStats(double MeanNs)
     {
@@ -278,7 +308,7 @@ static class Program
         }
     }
 
-    static void PrintTable(List<BenchmarkResults> rows)
+    static void PrintTable(IReadOnlyList<BenchmarkDiff> rows)
     {
         if (rows.Count == 0)
         {
@@ -298,6 +328,28 @@ static class Program
         foreach (var row in rows)
         {
             Console.WriteLine($"| {row.BenchmarkName.PadRight(columnWidth_Name)}|{row.Baseline.FormatTime().PadLeft(columnWidth_Times)} |{row.Head.FormatTime().PadLeft(columnWidth_Times)} |{row.Ratio,columnWidth_Ratio:F2} |");
+        }
+    }
+
+    static void PrintTable(IReadOnlyList<BenchmarkResult> rows)
+    {
+        if (rows.Count == 0)
+        {
+            Console.WriteLine("<none>");
+            return;
+        }
+
+        // Print a nice table that looks great in raw console monospace AND markdown.
+
+        int longestBenchmarkName = rows.Select(r => r.BenchmarkName.Length).Max();
+        int columnWidth_Name = Math.Max(longestBenchmarkName + 1, 30);
+        const int columnWidth_Times = 10;
+
+        Console.WriteLine($"| {"Benchmark".PadRight(columnWidth_Name)}| {"Time",-columnWidth_Times}|");
+        Console.WriteLine($"|{new string('-', columnWidth_Name)} |{new string('-', columnWidth_Times)}:|");
+        foreach (var row in rows)
+        {
+            Console.WriteLine($"| {row.BenchmarkName.PadRight(columnWidth_Name)}|{row.Result.FormatTime().PadLeft(columnWidth_Times)} |");
         }
     }
 
@@ -367,7 +419,7 @@ static class Program
 
 
     static readonly string[] MOTDs = 
-    {
+    [
         "Remember, the real Benchmark Buddy was the friends we made along the way.",
         "Life is more fun when you put things on top of your head.",
         "Why not Zoidberg?",
@@ -403,5 +455,5 @@ static class Program
         "Life is hard and then you die.",
         "By convention there is sweetness, by convention bitterness, by convention color, in reality only atoms and the void.",
         "Is the system going to flatten you out and deny you your humanity, or are you going to be able to make use of the system to the attainment of human purposes?",
-    };
+    ];
 }
