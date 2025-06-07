@@ -217,7 +217,7 @@ static class Program
                 var parsed = ParseBenchmarkJson(jsonFile);
 
                 foreach (var (name, stats) in parsed)
-                    results[name] = stats;
+                    results.Add(name, stats);
             }
         }
         return results;
@@ -258,6 +258,10 @@ static class Program
                     string typeName = bench.GetProperty("Type").GetString() ?? "<unknown>";
                     string methodTitle = bench.GetProperty("MethodTitle").GetString() ?? "<unknown>";
                     name = $"{typeName} - {methodTitle}";
+
+                    string? parameters = bench.GetProperty("Parameters").GetString();
+                    if (!string.IsNullOrWhiteSpace(parameters))
+                        name += $" - {parameters}";
                 }
 
                 var mean = bench.GetProperty("Statistics").GetProperty("Mean").GetDouble();
