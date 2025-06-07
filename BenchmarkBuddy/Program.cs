@@ -37,7 +37,7 @@ static class Program
         var thresholdOption = new Option<double>(
             aliases: ["--threshold", "-t"],
             getDefaultValue: () => 1.0,
-            description: "Minimum absolute % difference to report (defaults to 1%)");
+            description: "Minimum absolute % difference in execution time to report (defaults to 1%)");
 
         var filterOption = new Option<string>(
             aliases: ["--filter", "-f"],
@@ -97,6 +97,7 @@ static class Program
             await RunGit($"checkout {originalRef}", repoPath, writeOutput: true);
             if (hadChanges)
             {
+                Console.WriteLine();
                 Console.WriteLine("Popping stash...");
                 await RunGit("stash pop", repoPath, writeOutput: true);
             }
@@ -107,7 +108,7 @@ static class Program
             Console.WriteLine();
             Console.WriteLine();
 
-            var diffs = new List<BenchmarkDiff>();
+            var executionTimeDiffs = new List<BenchmarkDiff>();
             int benchmarksBelowThresholdCount = 0;
 
             foreach (var (benchmarkName, headStats) in headResults)
@@ -117,32 +118,75 @@ static class Program
                     continue;
 
 
-                var diffPercentage = (headStats.MeanNs - baselineStats.MeanNs) / baselineStats.MeanNs * 100.0;
+                var diffPercentage = (headStats.ExecutionTimeNanoseconds - baselineStats.ExecutionTimeNanoseconds) / baselineStats.ExecutionTimeNanoseconds * 100.0;
 
                 if (Math.Abs(diffPercentage) >= thresholdPercent)
-                    diffs.Add(new(benchmarkName, baselineStats, headStats));
+                    executionTimeDiffs.Add(new(benchmarkName, baselineStats, headStats));
                 else
                     benchmarksBelowThresholdCount++;
             }
 
-            var better = diffs.Where(d => d.Ratio < 1.0).OrderBy(d => d.Ratio).ToList();
-            var worse = diffs.Where(d => d.Ratio >= 1.0).OrderByDescending(d => d.Ratio).ToList();
+            var faster = executionTimeDiffs.Where(d => d.ExecutionTimeRatio < 1.0).OrderBy(d => d.ExecutionTimeRatio).ToList();
+            var slower = executionTimeDiffs.Where(d => d.ExecutionTimeRatio >= 1.0).OrderByDescending(d => d.ExecutionTimeRatio).ToList();
 
             Console.WriteLine();
             Console.WriteLine();
             Console.WriteLine("Faster benchmarks:");
             Console.WriteLine();
-            PrintTable(better);
+            PrintTable(faster, Measurement.ExecutionTime);
 
             Console.WriteLine();
             Console.WriteLine();
             Console.WriteLine("Slower benchmarks:");
             Console.WriteLine();
-            PrintTable(worse);
+            PrintTable(slower, Measurement.ExecutionTime);
 
             Console.WriteLine();
             Console.WriteLine();
             Console.WriteLine($"{benchmarksBelowThresholdCount} benchmarks not shown because they were below the difference threshold of {thresholdPercent}%.");
+
+
+            if (baselineResults.Values.Any(s => s.HasAllocatedMeasurement) && headResults.Values.Any(s => s.HasAllocatedMeasurement))
+            {
+                var allocationsDiffs = new List<BenchmarkDiff>();
+                int benchmarksWithSameAllocation = 0;
+
+                foreach (var (benchmarkName, headStats) in headResults)
+                {
+                    // Only report benchmarks that are present in both baseline and head
+                    if (!baselineResults.TryGetValue(benchmarkName, out var baselineStats))
+                        continue;
+
+                    var diff = new BenchmarkDiff(benchmarkName, baselineStats, headStats);
+                    if (diff.Baseline.HasAllocatedMeasurement && diff.Head.HasAllocatedMeasurement)
+                    {
+                        if (diff.AllocationsDifference == 0)
+                            benchmarksWithSameAllocation++;
+                        else
+                            allocationsDiffs.Add(diff);
+                    }
+                }
+
+                var lessAlloc = allocationsDiffs.Where(d => d.AllocationsDifference < 1.0).OrderBy(d => d.ExecutionTimeRatio).ToList(); // same order as the other tables for easy comparison
+                var moreAlloc = allocationsDiffs.Where(d => d.AllocationsDifference >= 1.0).OrderByDescending(d => d.ExecutionTimeRatio).ToList();
+
+                Console.WriteLine();
+                Console.WriteLine();
+                Console.WriteLine("Benchmarks with less allocation:");
+                Console.WriteLine();
+                PrintTable(lessAlloc, Measurement.Allocations);
+
+                Console.WriteLine();
+                Console.WriteLine();
+                Console.WriteLine("Benchmarks with more allocation:");
+                Console.WriteLine();
+                PrintTable(moreAlloc, Measurement.Allocations);
+
+                Console.WriteLine();
+                Console.WriteLine();
+                Console.WriteLine($"{benchmarksWithSameAllocation} benchmarks not shown because they had identical allocation.");
+            }
+
 
 
 
@@ -167,6 +211,10 @@ static class Program
                 PrintTable(benchmarksOnlyInBaseline);
             }
 
+
+            Console.WriteLine();
+            Console.WriteLine();
+            Console.WriteLine("=========================================");
             Console.WriteLine();
             Console.WriteLine();
             Console.WriteLine("And thus ends the output of Benchmark Buddy. Have a nice day!");
@@ -264,8 +312,13 @@ static class Program
                         name += $" - {parameters}";
                 }
 
-                var mean = bench.GetProperty("Statistics").GetProperty("Mean").GetDouble();
-                dict[name] = new BenchmarkStats(mean);
+                var meanNs = bench.GetProperty("Statistics").GetProperty("Mean").GetDouble();
+
+                int? allocatedBytes = null;
+                if (bench.TryGetProperty("Memory", out var memoryProperty))
+                    allocatedBytes = memoryProperty.GetProperty("BytesAllocatedPerOperation").GetInt32();
+
+                dict[name] = new BenchmarkStats(meanNs, allocatedBytes);
             }
             return dict;
         }
@@ -274,45 +327,57 @@ static class Program
 
     readonly record struct BenchmarkDiff(string BenchmarkName, BenchmarkStats Baseline, BenchmarkStats Head)
     {
-        public double Ratio => Head.MeanNs / Baseline.MeanNs;
+        public double ExecutionTimeRatio => Head.ExecutionTimeNanoseconds / Baseline.ExecutionTimeNanoseconds;
+        public int? AllocationsDifference => (Head.AllocatedBytes == null || Baseline.AllocatedBytes == null) ? null : Head.AllocatedBytes.Value - Baseline.AllocatedBytes.Value;
     }
 
     readonly record struct BenchmarkResult(string BenchmarkName, BenchmarkStats Result);
 
-    readonly record struct BenchmarkStats(double MeanNs)
+    readonly record struct BenchmarkStats(double ExecutionTimeNanoseconds, int? AllocatedBytes)
     {
-        public string FormatTime()
+        public string FormatExecutionTime()
         {
             string unit;
             double value;
 
-            if (MeanNs < 1_000)
+            if (ExecutionTimeNanoseconds < 1_000)
             {
                 unit = "ns";
-                value = MeanNs;
+                value = ExecutionTimeNanoseconds;
             }
-            else if (MeanNs < 1_000_000)
+            else if (ExecutionTimeNanoseconds < 1_000_000)
             {
                 unit = "µs";
-                value = MeanNs / 1_000;
+                value = ExecutionTimeNanoseconds / 1_000;
             }
-            else if (MeanNs < 1_000_000_000)
+            else if (ExecutionTimeNanoseconds < 1_000_000_000)
             {
                 unit = "ms";
-                value = MeanNs / 1_000_000;
+                value = ExecutionTimeNanoseconds / 1_000_000;
             }
             else
             {
                 unit = "s";
-                value = MeanNs / 1_000_000_000;
+                value = ExecutionTimeNanoseconds / 1_000_000_000;
             }
 
             string format = value < 1_000 ? "F2" : value < 100_000 ? "F1" : "F0";
             return $"{value.ToString(format)} {unit}";
         }
+
+        public bool HasAllocatedMeasurement => AllocatedBytes != null;
+        public string FormatAllocated()
+        {
+            if (AllocatedBytes is not int byteCount)
+                return "<no measurement>";
+
+            return byteCount + "B";
+        }
     }
 
-    static void PrintTable(IReadOnlyList<BenchmarkDiff> rows)
+    enum Measurement { ExecutionTime, Allocations }
+
+    static void PrintTable(IReadOnlyList<BenchmarkDiff> rows, Measurement measurement)
     {
         if (rows.Count == 0)
         {
@@ -324,14 +389,40 @@ static class Program
 
         int longestBenchmarkName = rows.Select(r => r.BenchmarkName.Length).Max();
         int columnWidth_Name = Math.Max(longestBenchmarkName + 1, 30);
-        const int columnWidth_Times = 10;
-        const int columnWidth_Ratio = 10;
+        const int columnWidth_Measurement = 12;
+        const int columnWidth_Comparison = 12;
 
-        Console.WriteLine($"| {"Benchmark".PadRight(columnWidth_Name)}| {"Baseline",-columnWidth_Times}| {"Head",-columnWidth_Times}| {"Ratio",-columnWidth_Ratio}|");
-        Console.WriteLine($"|{new string('-', columnWidth_Name)} |{new string('-', columnWidth_Times)}:|{new string('-', columnWidth_Times)}:|{new string('-', columnWidth_Ratio)}:|");
+        string comparisonColumnTitle = measurement switch
+        {
+            Measurement.ExecutionTime => "Ratio",
+            Measurement.Allocations => "Change",
+            _ => throw new Exception()
+        };
+
+        Console.WriteLine($"| {"Benchmark".PadRight(columnWidth_Name)}| {"Baseline",-columnWidth_Measurement}| {"Head",-columnWidth_Measurement}| {comparisonColumnTitle,-columnWidth_Comparison}|");
+        Console.WriteLine($"|{new string('-', columnWidth_Name)} |{new string('-', columnWidth_Measurement)} |{new string('-', columnWidth_Measurement)} |{new string('-', columnWidth_Comparison)} |");
         foreach (var row in rows)
         {
-            Console.WriteLine($"| {row.BenchmarkName.PadRight(columnWidth_Name)}|{row.Baseline.FormatTime().PadLeft(columnWidth_Times)} |{row.Head.FormatTime().PadLeft(columnWidth_Times)} |{row.Ratio,columnWidth_Ratio:F2} |");
+            string measurementBaseline = measurement switch
+            {
+                Measurement.ExecutionTime => row.Baseline.FormatExecutionTime(),
+                Measurement.Allocations => row.Baseline.FormatAllocated(),
+                _ => throw new Exception()
+            };
+            string measurementHead = measurement switch
+            {
+                Measurement.ExecutionTime => row.Head.FormatExecutionTime(),
+                Measurement.Allocations => row.Head.FormatAllocated(),
+                _ => throw new Exception()
+            };
+            string comparison = measurement switch
+            {
+                Measurement.ExecutionTime => row.ExecutionTimeRatio.ToString("F2"),
+                Measurement.Allocations => row.AllocationsDifference?.ToString() ?? "--",
+                _ => throw new Exception()
+            };
+
+            Console.WriteLine($"| {row.BenchmarkName.PadRight(columnWidth_Name)}|{measurementBaseline,columnWidth_Measurement} |{measurementHead,columnWidth_Measurement} |{comparison,columnWidth_Comparison} |");
         }
     }
 
@@ -343,17 +434,33 @@ static class Program
             return;
         }
 
+        bool printAllocations = rows.Any(r => r.Result.HasAllocatedMeasurement);
+
         // Print a nice table that looks great in raw console monospace AND markdown.
 
         int longestBenchmarkName = rows.Select(r => r.BenchmarkName.Length).Max();
         int columnWidth_Name = Math.Max(longestBenchmarkName + 1, 30);
-        const int columnWidth_Times = 10;
+        const int columnWidth_Times = 12;
+        const int columnWidth_Allocated = 12;
 
-        Console.WriteLine($"| {"Benchmark".PadRight(columnWidth_Name)}| {"Time",-columnWidth_Times}|");
-        Console.WriteLine($"|{new string('-', columnWidth_Name)} |{new string('-', columnWidth_Times)}:|");
+        string header = $"| {"Benchmark".PadRight(columnWidth_Name)}| {"Time",-columnWidth_Times}|";
+        string line = $"|{new string('-', columnWidth_Name)} |{new string('-', columnWidth_Times)} |";
+
+        if (printAllocations)
+        {
+            header += $" {"Allocated",-columnWidth_Allocated}";
+            line += $"{new string('-', columnWidth_Allocated)} |";
+        }
+
+        Console.WriteLine(header);
+        Console.WriteLine(line);
         foreach (var row in rows)
         {
-            Console.WriteLine($"| {row.BenchmarkName.PadRight(columnWidth_Name)}|{row.Result.FormatTime().PadLeft(columnWidth_Times)} |");
+            string rowText = $"| {row.BenchmarkName.PadRight(columnWidth_Name)}|{row.Result.FormatExecutionTime(),columnWidth_Times} |";
+            if (printAllocations)
+                rowText += $"{row.Result.FormatAllocated,columnWidth_Allocated} |";
+
+            Console.WriteLine(rowText);
         }
     }
 
