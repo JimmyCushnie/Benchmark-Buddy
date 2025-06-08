@@ -458,7 +458,7 @@ static class Program
         {
             string rowText = $"| {row.BenchmarkName.PadRight(columnWidth_Name)}|{row.Result.FormatExecutionTime(),columnWidth_Times} |";
             if (printAllocations)
-                rowText += $"{row.Result.FormatAllocated,columnWidth_Allocated} |";
+                rowText += $"{row.Result.FormatAllocated(),columnWidth_Allocated} |";
 
             Console.WriteLine(rowText);
         }
