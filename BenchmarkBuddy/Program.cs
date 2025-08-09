@@ -1,13 +1,7 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using Buildalyzer;
 using System.CommandLine;
-using System.CommandLine.Invocation;
 using System.Diagnostics;
-using System.IO;
-using System.Linq;
 using System.Text.Json;
-using System.Threading.Tasks;
-using System.Xml.Linq;
 
 namespace BenchmarkBuddy;
 
@@ -275,14 +269,14 @@ static class Program
         {
             try
             {
-                var doc = XDocument.Load(csprojPath);
-                return doc.Descendants("PackageReference")
-                    .Any(x => (x.Attribute("Include")?.Value?.Trim() ?? "")
-                        .Equals("BenchmarkDotNet", StringComparison.OrdinalIgnoreCase));
+                var manager = new AnalyzerManager();
+                var analyzer = manager.GetProject(csprojPath);
+
+                return analyzer.ProjectFile.PackageReferences.Any(pr => pr.Name == "BenchmarkDotNet");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Failed to parse {csprojPath}: {ex.Message}");
+                Console.WriteLine($"There was an error analyzing the project at {csprojPath}: {ex.Message}");
                 return false;
             }
         }
